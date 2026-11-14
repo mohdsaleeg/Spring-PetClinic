@@ -1,37 +1,95 @@
 pipeline {
-  agent any
+    agent any
 
-  options {
-    timestamps()
-    timeout(time: 30, unit: 'MINUTES')
-  }
-
-  triggers {
-    pollSCM('H/2 * * * *')   // check GitHub about every 2 minutes
-  }
-
-  stages {
-    stage('Checkout') {
-      steps { checkout scm }
+    options {
+        timestamps()
+        timeout(time: 60, unit: 'MINUTES')
     }
 
-    stage('Build & Test') {
-      steps {
-        sh 'chmod +x mvnw'
-        sh './mvnw -B clean package'
-      }
-      post {
-        always { junit 'target/surefire-reports/*.xml' }
-      }
+    triggers {
+        pollSCM('H/2 * * * *')
     }
 
-    stage('Archive') {
-      steps { archiveArtifacts artifacts: 'target/*.jar', fingerprint: true }
-    }
-  }
+    stages {
 
-  post {
-    success { echo 'Build and tests passed.' }
-    failure { echo 'Build failed. Check the console output.' }
-  }
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & Test') {
+            steps {
+                sh 'chmod +x mvnw'
+                sh './mvnw -B clean package'
+            }
+            post {
+                always {
+                    junit 'target/surefire-reports/*.xml'
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    sh '''
+                        ./mvnw -B sonar:sonar \
+                          -Dsonar.projectKey=spring-petclinic
+                    '''
+                }
+            }
+        }
+
+        stage('SonarQube Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Dependency Scan (Trivy)') {
+            steps {
+                sh '''
+                    trivy fs --scanners vuln \
+                      --severity HIGH,CRITICAL \
+                      --format table \
+                      --output trivy-deps-report.txt \
+                      --cache-dir /var/jenkins_home/.trivy-cache .
+
+                    cat trivy-deps-report.txt
+
+                    trivy fs --scanners vuln \
+                      --severity CRITICAL \
+                      --exit-code 1 \
+                      --cache-dir /var/jenkins_home/.trivy-cache \
+                      --quiet .
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-deps-report.txt',
+                                     allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Archive') {
+            steps {
+                archiveArtifacts artifacts: 'target/*.jar',
+                                 fingerprint: true
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Build, tests, SonarQube and Trivy scan passed.'
+        }
+
+        failure {
+            echo 'Pipeline failed. Check the Console Output.'
+        }
+    }
 }
