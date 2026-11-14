@@ -40,7 +40,7 @@ On Windows PowerShell:
 ```powershell
 .\mvnw.cmd spring-boot:run
 ```
-
+Jenkins CI/CD integration successfully configured.
 Open your browser:
 
 http://localhost:8080
