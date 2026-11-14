@@ -31,11 +31,14 @@ pipeline {
         }
 
         stage('SonarQube Analysis') {
-            steps {
+             steps {
                 withSonarQubeEnv('sonarqube') {
                     sh '''
-                        ./mvnw -B sonar:sonar \
-                          -Dsonar.projectKey=spring-petclinic
+                    ./mvnw -B \
+                    org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar \
+                    -Dsonar.projectKey=spring-petclinic \
+                    -Dsonar.host.url="$SONAR_HOST_URL" \
+                    -Dsonar.token="$SONAR_AUTH_TOKEN"
                     '''
                 }
             }
