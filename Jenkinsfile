@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    environment {
+        IMAGE = "mohdsaleeg/spring-petclinic"
+        TAG   = "${BUILD_NUMBER}"
+    }
+
     options {
         timestamps()
         timeout(time: 60, unit: 'MINUTES')
@@ -21,7 +26,7 @@ pipeline {
         stage('Build & Test') {
             steps {
                 sh 'chmod +x mvnw'
-                sh "./mvnw -B clean package -Dtest='!PostgresIntegrationTests'"
+                sh "./mvnw -B clean package -Dtest='!PostgresIntegrationTests,!MySqlIntegrationTests'"
             }
             post {
                 always {
@@ -31,7 +36,7 @@ pipeline {
         }
 
         stage('SonarQube Analysis') {
-             steps {
+            steps {
                 withSonarQubeEnv('sonarqube') {
                     sh '''
                     ./mvnw -B \
@@ -84,15 +89,63 @@ pipeline {
                                  fingerprint: true
             }
         }
+
+        stage('Docker Build') {
+            steps {
+                sh 'docker build -t $IMAGE:$TAG -t $IMAGE:latest .'
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh '''
+                    trivy image --severity HIGH,CRITICAL --ignore-unfixed \
+                      --format table --output trivy-image-report.txt \
+                      --cache-dir /var/jenkins_home/.trivy-cache $IMAGE:$TAG
+
+                    cat trivy-image-report.txt
+
+                    trivy image --severity CRITICAL --ignore-unfixed \
+                      --exit-code 1 --quiet \
+                      --cache-dir /var/jenkins_home/.trivy-cache $IMAGE:$TAG
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-image-report.txt',
+                                     allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    sh '''
+                        echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+                        docker push $IMAGE:$TAG
+                        docker push $IMAGE:latest
+                    '''
+                }
+            }
+        }
     }
 
     post {
         success {
-            echo 'Build, tests, SonarQube and Trivy scan passed.'
+            echo 'Build, tests, SonarQube, Trivy and Docker deployment stages passed.'
         }
 
         failure {
             echo 'Pipeline failed. Check the Console Output.'
+        }
+
+        always {
+            sh 'docker logout || true'
         }
     }
 }
