@@ -133,11 +133,50 @@ pipeline {
                 }
             }
         }
+
+        // NEW STAGE: AUTOMATIC KUBERNETES MANIFEST UPDATE
+
+        stage('Update Kubernetes Manifest') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-creds',
+                    usernameVariable: 'GIT_USERNAME',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    sh '''
+                        set -e
+
+                        echo "Updating Kubernetes image tag..."
+
+                        git config user.name "jenkins"
+                        git config user.email "jenkins@localhost"
+
+                        sed -i "s|^[[:space:]]*image:.*|          image: $IMAGE:$TAG|" k8s/petclinic.yaml
+
+                        git add k8s/petclinic.yaml
+
+                        if ! git diff --cached --quiet; then
+
+                            git commit -m "Deploy Spring PetClinic build $TAG [skip ci]"
+
+                            AUTH=$(printf '%s' "$GIT_USERNAME:$GIT_TOKEN" | base64 | tr -d '\\n')
+
+                            git -c http.extraheader="AUTHORIZATION: basic $AUTH" push origin HEAD:main
+
+                            echo "Kubernetes manifest successfully pushed to GitHub."
+
+                        else
+                            echo "No manifest changes detected."
+                        fi
+                    '''
+                }
+            }
+        }
     }
 
     post {
         success {
-            echo 'Build, tests, SonarQube, Trivy and Docker deployment stages passed.'
+            echo 'Build, tests, SonarQube, Trivy, Docker deployment and Kubernetes manifest update passed.'
         }
 
         failure {
