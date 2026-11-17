@@ -36,7 +36,7 @@ Developer -> GitHub -> Jenkins (polls for new commits)
 | JaCoCo | Code coverage | Done |
 | SonarQube | Code quality and quality gate | Done |
 | Trivy | Dependency vulnerability scan | Done |
-| Docker, Docker Hub | Container image and registry | Planned |
+| Docker, Docker Hub | Container image and registry | Done |
 | Kubernetes, ArgoCD | Deployment (GitOps) | Planned |
 | PostgreSQL | Persistent database | Planned |
 | Prometheus, Grafana | Monitoring | Planned |
@@ -133,6 +133,7 @@ In SonarQube, add a webhook to `http://jenkins:8080/sonarqube-webhook/`.
 | OWASP Dependency-Check blocked | The NVD API key could not be generated | Used Trivy for dependency scanning, which needs no key |
 | Quality Gate stage timed out | The SonarQube webhook showed "Server Unreachable" because it blocks private Docker addresses | Recreated SonarQube with `SONAR_VALIDATEWEBHOOKS=false` |
 | `PostgresIntegrationTests` failed locally | The test starts a database through Docker Compose, which was removed from the baseline | Excluded it with `-Dtest='!PostgresIntegrationTests'` until a real database is added |
+Jenkins checkout failed with “not in a git directory”. Cause: the container was recreated as root, so Git rejected the workspace owned by another user. Fix: deleted the stale workspace and set safe.directory.
 
 ## Roadmap
 
@@ -195,4 +196,5 @@ http://localhost:8080
 
 ## Author
 
+Testing Jenkins SCM polling trigger.
 mohdsaleeg
