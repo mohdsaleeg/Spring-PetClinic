@@ -1,3 +1,4 @@
+```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,10 +7,12 @@ metadata:
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: petclinic }
+    matchLabels:
+      app: petclinic
   template:
     metadata:
-      labels: { app: petclinic }
+      labels:
+        app: petclinic
     spec:
       containers:
         - name: petclinic
@@ -22,29 +25,45 @@ spec:
               value: jdbc:postgresql://postgres:5432/petclinic
             - name: POSTGRES_USER
               valueFrom:
-                secretKeyRef: { name: db-credentials, key: POSTGRES_USER }
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_USER
             - name: POSTGRES_PASS
               valueFrom:
-                secretKeyRef: { name: db-credentials, key: POSTGRES_PASSWORD }
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_PASSWORD
           readinessProbe:
-            httpGet: { path: /actuator/health, port: 8080 }
+            httpGet:
+              path: /actuator/health
+              port: 8080
             initialDelaySeconds: 40
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /actuator/health, port: 8080 }
+            httpGet:
+              path: /actuator/health
+              port: 8080
             initialDelaySeconds: 90
             periodSeconds: 15
           resources:
-            requests: { cpu: 200m, memory: 512Mi }
-            limits: { memory: 768Mi }
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 768Mi
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: petclinic
   namespace: petclinic
+  labels:
+    app: petclinic
 spec:
-  selector: { app: petclinic }
+  selector:
+    app: petclinic
   ports:
-    - port: 80
+    - name: http
+      port: 80
       targetPort: 8080
+```
