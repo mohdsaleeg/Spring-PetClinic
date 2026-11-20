@@ -10,7 +10,7 @@ spec:
     - name: petclinic
       rules:
         - alert: PetClinicDown
-          expr: sum(up{namespace="petclinic", service="petclinic"}) == 0
+          expr: sum(up{namespace="petclinic", service="petclinic"}) or vector(0)) == 0
           for: 1m
           labels:
             severity: critical
