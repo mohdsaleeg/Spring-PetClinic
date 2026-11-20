@@ -1,0 +1,27 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: petclinic-alerts
+  namespace: petclinic
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: petclinic
+      rules:
+        - alert: PetClinicDown
+          expr: sum(up{namespace="petclinic", service="petclinic"}) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PetClinic has no running instances"
+        - alert: PetClinicHighErrorRate
+          expr: |
+            sum(rate(http_server_requests_seconds_count{namespace="petclinic", status=~"5.."}[5m]))
+              / sum(rate(http_server_requests_seconds_count{namespace="petclinic"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "More than 5% of PetClinic requests are failing"
