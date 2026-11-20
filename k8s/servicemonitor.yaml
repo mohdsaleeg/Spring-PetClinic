@@ -3,6 +3,8 @@ kind: ServiceMonitor
 metadata:
   name: petclinic
   namespace: petclinic
+  labels:
+    release: monitoring
 spec:
   selector:
     matchLabels:
