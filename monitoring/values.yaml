@@ -16,7 +16,8 @@ grafana:
 alertmanager:
   alertmanagerSpec:
     resources:
-      limits: { memory: 128Mi }
+      requests: { cpu: 10m, memory: 64Mi }
+      limits: { memory: 256Mi }
 
 # Not useful on a kind cluster, and they cause false alerts
 nodeExporter:
