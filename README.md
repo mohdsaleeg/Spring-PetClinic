@@ -1,8 +1,8 @@
 # Spring PetClinic: DevOps CI/CD Pipeline
 
-A DevOps project that wraps the open-source [Spring PetClinic](https://github.com/spring-projects/spring-petclinic) application in a complete automated pipeline: build, test, code quality, security scanning, containerization and GitOps deployment to Kubernetes with a persistent PostgreSQL database.
+A DevOps project that wraps the open-source [Spring PetClinic](https://github.com/spring-projects/spring-petclinic) application in a complete automated pipeline: build, test, code quality, security scanning, containerization, GitOps deployment to Kubernetes with a persistent PostgreSQL database, and monitoring with alerting.
 
-The application code is unchanged. The project is everything between a `git push` and the new version running in the cluster.
+The application code is unchanged, apart from adding a metrics dependency. The project is everything between a `git push` and the new version running in the cluster, observed and alerting.
 
 ## Before and after
 
@@ -15,6 +15,8 @@ The application code is unchanged. The project is everything between a `git push
 | Packaging | Loose `.jar` on a laptop | Docker image, scanned and versioned on Docker Hub |
 | Deployment | `java -jar` by hand | ArgoCD syncs Kubernetes from Git |
 | Database | In-memory H2, data lost on restart | PostgreSQL with a persistent volume |
+| Monitoring | None | Prometheus metrics, Grafana dashboard |
+| Failure detection | Notice it by hand | Alertmanager alert when PetClinic is down |
 
 ## Pipeline flow
 
@@ -34,6 +36,11 @@ Developer -> GitHub -> Jenkins (polls for new commits)
                                     Kubernetes (kind)
                                        +-> PetClinic Deployment
                                        +-> PostgreSQL StatefulSet + PersistentVolume
+                                       +-> ServiceMonitor + PrometheusRule
+                                       |
+                    Prometheus -> Grafana dashboard
+                         |
+                    Alertmanager (PetClinicDown, PetClinicHighErrorRate)
 ```
 
 Jenkins never runs `kubectl`. It only updates Git, and ArgoCD makes the cluster match Git. This is the GitOps model: every deployment is a Git commit, so history and rollback come for free.
@@ -52,7 +59,10 @@ Jenkins never runs `kubectl`. It only updates Git, and ArgoCD makes the cluster 
 | Kubernetes (kind) | Runs the application | Done |
 | PostgreSQL | Persistent database (StatefulSet + PVC) | Done |
 | ArgoCD | GitOps continuous delivery | Done |
-| Prometheus, Grafana, Alertmanager | Monitoring and alerting | Planned |
+| Micrometer + Spring Boot Actuator | Expose application metrics | Done |
+| Prometheus | Metrics collection and alert rules | Done |
+| Grafana | Dashboards | Done |
+| Alertmanager | Alert routing | Done |
 | Terraform, Ansible | Infrastructure as code on Azure | Planned |
 
 ## Pipeline stages
@@ -70,9 +80,22 @@ Jenkins never runs `kubectl`. It only updates Git, and ArgoCD makes the cluster 
 | Push to Docker Hub | Pushes both tags using stored credentials |
 | Update Kubernetes Manifest | Writes the new image tag into `k8s/petclinic.yaml` and pushes to Git |
 
+## Monitoring and alerting
+
+PetClinic exposes metrics at `/actuator/prometheus` through Micrometer. Prometheus scrapes them through a `ServiceMonitor`, Grafana shows them on a dashboard, and `PrometheusRule` alerts are delivered to Alertmanager.
+
+| Alert | Condition | Severity |
+|---|---|---|
+| `PetClinicDown` | No PetClinic target is up for 1 minute | critical |
+| `PetClinicHighErrorRate` | More than 5% of requests return a 5xx error for 5 minutes | warning |
+
+The monitoring stack is installed with the `kube-prometheus-stack` Helm chart, using resource limits tuned for a small local cluster (`monitoring/values.yaml`). The dashboard is exported to `monitoring/petclinic-dashboard.json`.
+
+To prove the alert works, auto-sync was paused and the deployment scaled to zero. `PetClinicDown` moved from Pending to Firing and appeared in Alertmanager, and recovered after the app was restored.
+
 ## Results
 
-**Jenkins pipeline (all 11 stages)**
+**Jenkins pipeline (all stages)**
 
 ![Jenkins stage view](docs/images/jenkins-stage-view.png)
 
@@ -112,25 +135,46 @@ Jenkins never runs `kubectl`. It only updates Git, and ArgoCD makes the cluster 
 
 ![Persistence](docs/images/postgres-persistence.png)
 
+**Grafana dashboard: availability, JVM memory, CPU and HTTP requests**
+
+![Grafana dashboard](docs/images/grafana-dashboard.png)
+
+**Prometheus target: PetClinic is UP**
+
+![Prometheus targets](docs/images/prometheus-targets.png)
+
+**Alert test: PetClinicDown firing**
+
+![Alert firing](docs/images/prometheus-alert-firing.png)
+
+**Alertmanager receiving the alert**
+
+![Alertmanager](docs/images/alertmanager-alerts.png)
+
 ## Repository layout
 
 ```
 .
-├── src/, pom.xml          Application code and Maven build
-├── Jenkinsfile            Pipeline definition
-├── Dockerfile             PetClinic image
+├── src/, pom.xml            Application code and Maven build
+├── Jenkinsfile              Pipeline definition
+├── Dockerfile               PetClinic image
 ├── .dockerignore
-├── jenkins/Dockerfile     Custom Jenkins image with Docker CLI and Trivy
+├── jenkins/Dockerfile       Custom Jenkins image with Docker CLI and Trivy
 ├── k8s/
-│   ├── postgres.yaml      PostgreSQL StatefulSet, Service and volume claim
-│   └── petclinic.yaml     PetClinic Deployment and Service (image tag updated by Jenkins)
+│   ├── postgres.yaml        PostgreSQL StatefulSet, Service and volume claim
+│   ├── petclinic.yaml       PetClinic Deployment and Service (image tag updated by Jenkins)
+│   ├── servicemonitor.yaml  Tells Prometheus to scrape PetClinic
+│   └── prometheusrule.yaml  Alert rules
 ├── argocd/application.yaml  ArgoCD application pointing at k8s/
-└── docs/images/           Screenshots used in this README
+├── monitoring/
+│   ├── values.yaml          Helm values for the monitoring stack
+│   └── petclinic-dashboard.json  Exported Grafana dashboard
+└── docs/images/             Screenshots used in this README
 ```
 
 ## How to run it locally
 
-Requirements: Docker Desktop (6 GB RAM or more), kubectl, Helm, kind, Java 17+, Git, a Docker Hub account and token, and a GitHub fine-grained token with Contents read and write on this repo.
+Requirements: Docker Desktop (6 GB RAM or more, 16 GB total recommended), kubectl, Helm, kind, Java 17+, Git, a Docker Hub account and token, and a GitHub fine-grained token with Contents read and write on this repo.
 
 **1. CI tools**
 
@@ -166,16 +210,31 @@ kubectl create secret generic db-credentials -n petclinic \
 kubectl create namespace argocd
 kubectl apply -n argocd --server-side --force-conflicts \
   -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+**3. Monitoring stack (install before ArgoCD syncs the ServiceMonitor and PrometheusRule)**
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  -n monitoring --create-namespace \
+  -f monitoring/values.yaml \
+  --set grafana.adminPassword='<your-password>'
+
 kubectl apply -f argocd/application.yaml
 ```
 
-The database secret is created by hand and is never committed to Git.
+The database and Grafana passwords are supplied at install time and are never committed to Git.
 
 Access the apps with port-forwards:
 
 ```bash
-kubectl port-forward svc/argocd-server -n argocd 8083:443        # https://localhost:8083
-kubectl port-forward -n petclinic svc/petclinic 8082:80          # http://localhost:8082
+kubectl port-forward svc/argocd-server -n argocd 8083:443                                   # https://localhost:8083
+kubectl port-forward -n petclinic svc/petclinic 8082:80                                     # http://localhost:8082
+kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80                           # http://localhost:3000
+kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-prometheus 9090:9090      # http://localhost:9090
+kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-alertmanager 9093:9093   # http://localhost:9093
 ```
 
 ## Design decisions
@@ -191,6 +250,8 @@ kubectl port-forward -n petclinic svc/petclinic 8082:80          # http://localh
 | Custom Jenkins image | Docker CLI and Trivy survive container recreation, and the setup is reproducible |
 | `pollSCM` instead of a GitHub webhook | GitHub cannot reach `localhost` |
 | Fail only on CRITICAL findings | Keeps the gate meaningful without constant failures from minor issues |
+| Alerts defined as code in Git | Rules are reviewed, versioned and deployed by ArgoCD like the application |
+| Alert expression ends in `or vector(0)` | A missing target produces no data, so without it the "down" alert can never fire |
 
 ## Challenges and fixes
 
@@ -203,14 +264,20 @@ kubectl port-forward -n petclinic svc/petclinic 8082:80          # http://localh
 | `PostgresIntegrationTests` failed | The test starts a database through Docker Compose, which was removed from the baseline | Excluded the database integration tests with `-Dtest` (see roadmap) |
 | Jenkins checkout failed with "not in a git directory" | The container was recreated as root, so Git rejected a workspace owned by another user | Deleted the stale workspace and set Git `safe.directory` |
 | ArgoCD server showed `CreateContainerConfigError` right after install | It started before its secrets existed | Resolved itself after a retry |
+| ArgoCD silently stopped syncing | An invalid character in `petclinic.yaml`, while Jenkins still reported success | Fixed the file, and now run `kubectl apply --dry-run=server` before pushing |
+| "Service down" alert never fired | When no pods exist, the `up` metric disappears, and `sum()` of nothing is empty rather than 0 | Added `or vector(0)`, and verified by scaling the deployment to zero |
+| Alertmanager pod never started | A 128Mi memory limit was lower than the operator's default request | Set an explicit request and a higher limit in `values.yaml` |
+| ArgoCD stayed OutOfSync | The Prometheus operator's admission webhook rejected an invalid alert rule from Git, while the older rule in the cluster kept working | Found it in `operationState.message`, fixed the expression, and pushed |
+| Scaling down for the alert test was undone immediately | ArgoCD self-heal restores the replica count | Paused auto-sync for the test and restored it afterward |
+| `kubectl patch` failed with "invalid JSON patch" | PowerShell strips quotes from inline JSON | Passed the patch through a file with `--patch-file` |
 
 ## Roadmap
 
-1. Prometheus, Grafana and Alertmanager monitoring, with Slack notifications
-2. Terraform and Ansible to provision the infrastructure on Azure
+1. Terraform and Ansible to provision the infrastructure on Azure
+2. Slack notifications from Alertmanager and Jenkins
 3. Re-enable the PostgreSQL and MySQL integration tests, which need a database available to the Jenkins build
+4. A manifest validation stage in the Jenkinsfile, so an invalid file fails the build instead of blocking ArgoCD
 
 ---
 
 # About the Application
-<!-- Jenkins SCM polling verification -->
