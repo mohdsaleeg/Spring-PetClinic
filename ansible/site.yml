@@ -1,0 +1,112 @@
+---
+- name: Configure the CI server (Docker, Jenkins, SonarQube)
+  hosts: ci_server
+  become: true
+
+  vars:
+    repo_url: "https://github.com/mohdsaleeg/Spring-PetClinic.git"
+    repo_dest: /opt/spring-petclinic
+
+  tasks:
+    - name: Install Docker, Git and the Docker Python SDK
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - git
+          - python3-docker
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Make sure Docker is running and starts on boot
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Kernel setting that SonarQube requires
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-sonarqube.conf
+        content: |
+          vm.max_map_count=524288
+          fs.file-max=131072
+        mode: "0644"
+      notify: Reload sysctl
+
+    - name: Apply kernel settings now (handlers otherwise run at the end)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Clone the project (it contains jenkins/Dockerfile)
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_dest }}"
+        version: main
+        force: true
+
+    - name: Create the shared Docker network
+      community.docker.docker_network:
+        name: devops
+
+    - name: Build the custom Jenkins image (Docker CLI and Trivy included)
+      community.docker.docker_image:
+        name: jenkins-devops
+        source: build
+        build:
+          path: "{{ repo_dest }}/jenkins"
+
+    - name: Run Jenkins
+      community.docker.docker_container:
+        name: jenkins
+        image: jenkins-devops
+        user: root
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: devops
+        published_ports:
+          - "8080:8080"
+          - "50000:50000"
+        volumes:
+          - jenkins_home:/var/jenkins_home
+          - /var/run/docker.sock:/var/run/docker.sock
+
+    - name: Run SonarQube
+      community.docker.docker_container:
+        name: sonarqube
+        image: sonarqube:community
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: devops
+        published_ports:
+          - "9000:9000"
+        env:
+          SONAR_VALIDATEWEBHOOKS: "false"
+        volumes:
+          - sonarqube_data:/opt/sonarqube/data
+          - sonarqube_extensions:/opt/sonarqube/extensions
+
+    - name: Wait for Jenkins to answer
+      ansible.builtin.wait_for:
+        port: 8080
+        timeout: 300
+
+    - name: Read the first-time Jenkins admin password
+      ansible.builtin.command: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+      register: jenkins_password
+      retries: 18
+      delay: 10
+      until: jenkins_password.rc == 0
+      changed_when: false
+
+    - name: Show where to log in
+      ansible.builtin.debug:
+        msg:
+          - "Jenkins:    http://{{ inventory_hostname }}:8080"
+          - "SonarQube:  http://{{ inventory_hostname }}:9000  (admin / admin, then change it)"
+          - "Jenkins first-time password: {{ jenkins_password.stdout }}"
+
+  handlers:
+    - name: Reload sysctl
+      ansible.builtin.command: sysctl --system
+      changed_when: true
