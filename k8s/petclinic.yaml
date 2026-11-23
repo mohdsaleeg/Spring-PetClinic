@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
         - name: petclinic
-          image: mohdsaleeg/spring-petclinic:65
+          image: mohdsaleeg/spring-petclinic:66
           ports: [{ containerPort: 8080 }]
           env:
             - name: SPRING_PROFILES_ACTIVE
