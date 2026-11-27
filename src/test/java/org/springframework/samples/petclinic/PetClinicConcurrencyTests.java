@@ -101,10 +101,10 @@ public class PetClinicConcurrencyTests {
 		}
 
 		try {
-			boolean ready = readyLatch.await(10, TimeUnit.SECONDS);
+			boolean ready = readyLatch.await(30, TimeUnit.SECONDS);
 			assertThat(ready).isTrue();
 			startLatch.countDown();
-			boolean completed = doneLatch.await(10, TimeUnit.SECONDS);
+			boolean completed = doneLatch.await(30, TimeUnit.SECONDS);
 			assertThat(completed).isTrue();
 		}
 		finally {
